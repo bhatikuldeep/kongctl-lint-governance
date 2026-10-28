@@ -1,0 +1,11 @@
+_defaults:
+  kongctl:
+    namespace: team-b-dev
+control_planes:
+  - ref: team-b-dev-cp
+    name: team-b-dev
+    labels:
+      owner: team-b-ops
+      cost_centre: 30CD40
+      service_id: SVC-B
+      application_id: APP-B

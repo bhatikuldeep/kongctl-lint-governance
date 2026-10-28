@@ -1,0 +1,58 @@
+# Rules every team's kongctl files must satisfy, whichever team they belong to. No team-specific values here.
+# Team rulesets (teams/<team>/ruleset.yaml) extend this file and add that team's own values.
+# Add a resource type to the three "given" lists below when you start governing it.
+rules:
+  resources-namespace-declared:
+    description: "Every file declares a namespace, so a pipeline can only change what it owns"
+    message: "Set _defaults.kongctl.namespace in this file"
+    severity: error
+    given: "$"
+    then: {field: "_defaults.kongctl.namespace", function: truthy}
+
+  resources-label-owner:
+    description: "Every resource carries an owner"
+    message: "labels.owner is required"
+    severity: error
+    given: ["$.control_planes[*]"]
+    then: {field: labels.owner, function: truthy}
+
+  resources-label-cost-centre:
+    description: "Every resource carries a cost centre in the agreed format"
+    message: "labels.cost_centre is required and must look like 10AB20"
+    severity: error
+    given: ["$.control_planes[*]"]
+    then:
+      - {field: labels.cost_centre, function: truthy}
+      - {field: labels.cost_centre, function: pattern, functionOptions: {match: "^[0-9]{2}[A-Z]{2}[0-9]{2}$"}}
+
+  resources-label-service-id:
+    description: "Every resource carries a service ID"
+    message: "labels.service_id is required"
+    severity: error
+    given: ["$.control_planes[*]"]
+    then: {field: labels.service_id, function: truthy}
+
+  resources-label-application-id:
+    description: "Every resource carries an application ID"
+    message: "labels.application_id is required"
+    severity: error
+    given: ["$.control_planes[*]"]
+    then: {field: labels.application_id, function: truthy}
+
+  # Konnect label rules (https://developer.konghq.com/konnect-platform/konnect-labels): caught here, before apply
+  resources-label-value-format:
+    description: "Label values are at most 63 characters, start and end with a letter or digit, and use only letters, digits, dash, underscore and dot (no spaces, no @)"
+    message: "Label value is not valid for Konnect: use letters, digits, - _ . only (no spaces or @), start and end with a letter or digit, max 63 characters"
+    severity: error
+    given: ["$.control_planes[*].labels.*"]
+    then: {function: pattern, functionOptions: {match: "^[a-zA-Z0-9]([a-zA-Z0-9._-]{0,61}[a-zA-Z0-9])?$"}}
+
+  resources-label-key-format:
+    description: "Label keys follow the same format and must not start with a reserved prefix"
+    message: "Label key is not valid for Konnect: same format as values, and not starting with kong, konnect, insomnia, mesh, kic, kuma or _"
+    severity: error
+    given: ["$.control_planes[*].labels.*~"]
+    then:
+      - {function: pattern, functionOptions: {match: "^[a-zA-Z0-9]([a-zA-Z0-9._-]{0,61}[a-zA-Z0-9])?$"}}
+      - {function: pattern, functionOptions: {notMatch: "^(kong|konnect|insomnia|mesh|kic|kuma)"}}
+

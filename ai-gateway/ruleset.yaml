@@ -1,0 +1,646 @@
+# =====================================================================================================================
+# Kong AI Gateway 2.x baseline
+# =====================================================================================================================
+# PURPOSE   Catch insecure, costly or fragile AI Gateway 2.x configuration before it is applied.
+# LINTS     kongctl declarative files: ai_gateways, models, agents, MCP servers, policies, auth strategies, providers.
+# FORMAT    Spectral-compatible ruleset. Severity: error = never ship; warn = fix or justify in review; info/hint = a prompt for a decision.
+#
+# RUN
+#   kongctl lint -f <file-or-dir> -R -r ai-gateway/ruleset.yaml          # fail on errors
+#   kongctl lint -f <file-or-dir> -R -r ai-gateway/ruleset.yaml -F warn  # fail on warnings too
+#
+# SCOPE
+#   Sees      Each YAML file on its own. Resources are matched as root keys (ai_gateway_models) and nested (ai_gateways[].models).
+#   Cannot    Expand `_extends` templates, follow `!ref` across files, or prove a policy is attached to anything. Rules that need a value
+#             skip targets that use `_extends`: lint the templates file too.
+#   Not a     Replacement for `kongctl plan`, the only place the API validates policy `config`.
+#
+# READING A RULE
+#   id        Stable, prefixed `aigw-`. Cite it in review comments and waivers.
+#   [OBS]     A description ending in [OBS] records behaviour observed on AI Gateway 2.2.0, so it can be revisited when the product changes.
+#
+# AUTHORING NOTES (verified on kongctl 1.20.2, 2026-10-09)
+#   - `defined`, `truthy`, `pattern`, and `schema` with a scalar `const`/`minimum`/`type` evaluate; JSONPath filters work.
+#   - `truthy` fails on a missing AND a false field: use it for "must be present and true".
+#   - `falsy`, `schema const` and `enumeration` SKIP a missing field: add `defined` beside them for "must be stated".
+#   - A `falsy` on a field that always exists is how a hint rule fires on the presence of an object.
+#   - A nested `schema` over whole objects holding tagged scalars (`!env`) does NOT evaluate: avoid it.
+# =====================================================================================================================
+
+rules:
+  # ---------- Ownership and change governance ----------
+  aigw-namespace-required:
+    description: "Every declarative file must set _defaults.kongctl.namespace so a pipeline can only change what it owns (use --require-namespace)."
+    message: "Set _defaults.kongctl.namespace in this file."
+    severity: error
+    given: "$"
+    then: {field: "_defaults.kongctl.namespace", function: truthy}
+
+  aigw-gateway-runtime-pinned:
+    description: "Pin the gateway runtime: set min_runtime_version and runtime_auto_upgrade: false so upgrades are a reviewed change (2.2 needs identical control plane and data plane versions)."
+    message: "Gateway should set min_runtime_version and runtime_auto_upgrade: false."
+    severity: warn
+    given: ["$.ai_gateways[*]"]
+    then: [{field: min_runtime_version, function: truthy}, {field: runtime_auto_upgrade, function: defined}]
+
+  # ---------- Authentication and authorisation ----------
+  aigw-model-auth-required:
+    description: "Every AI Model must reference an auth strategy (key-auth or openid-connect): no anonymous model access."
+    message: "Model has no access.auth_strategies."
+    severity: error
+    given: ["$.ai_gateway_models[*]", "$.ai_gateways[*].models[*]"]
+    then: {field: access.auth_strategies, function: truthy}
+
+  aigw-agent-auth-required:
+    description: "Every AI Agent (A2A) must reference an auth strategy."
+    message: "Agent has no access.auth_strategies."
+    severity: error
+    given: ["$.ai_gateway_agents[*]", "$.ai_gateways[*].agents[*]"]
+    then: {field: access.auth_strategies, function: truthy}
+
+  aigw-mcp-auth-required:
+    description: "Every MCP server that accepts client calls must reference an auth strategy (upstream-server types are internal and excluded)."
+    message: "MCP server has no access.auth_strategies."
+    severity: error
+    given: ["$.ai_gateway_mcp_servers[?(@.type!='upstream-server')]", "$.ai_gateways[*].mcp_servers[?(@.type!='upstream-server')]"]
+    then: {field: access.auth_strategies, function: truthy}
+
+  aigw-mcp-default-deny:
+    description: "MCP tools NOT listed under `tools:` stay visible and callable unless default_tool_acls restricts them (observed on 2.2.0). Set default_tool_acls with an allow list (an admins group) so unlisted tools are denied by default."
+    message: "MCP server has no access.default_tool_acls (unlisted tools stay open)."
+    severity: error
+    given: ["$.ai_gateway_mcp_servers[?(@.type!='upstream-server')]", "$.ai_gateways[*].mcp_servers[?(@.type!='upstream-server')]"]
+    then: {field: access.default_tool_acls, function: truthy}
+
+  aigw-credential-no-literal-key:
+    description: "Consumer API keys must come from !secret (write-only, never in plans or git): no literal key material."
+    message: "api_key looks like a literal secret: use !secret {source: !env VAR}."
+    severity: error
+    given: ["$.ai_gateway_consumers[*].credentials[*]", "$.ai_gateways[*].consumers[*].credentials[*]"]
+    then: {field: api_key, function: pattern, functionOptions: {notMatch: "^[A-Za-z0-9_-]{20,}$"}}
+
+  aigw-credential-expiry:
+    description: "Give every credential an expiry (ttl > 0 seconds) and rotate; ttl: 0 means the key never expires. Sandbox and demo keys may accept this warning."
+    message: "Credential never expires (ttl: 0): set a ttl and a rotation path."
+    severity: warn
+    given: ["$.ai_gateway_consumers[*].credentials[*]", "$.ai_gateways[*].consumers[*].credentials[*]"]
+    then: {field: ttl, function: schema, functionOptions: {schema: {minimum: 1}}}
+
+  # ---------- Secrets ----------
+  aigw-provider-no-literal-secret:
+    description: "Provider credentials must be a vault reference ({vault://<vault>/<key>}) or a !secret: never a literal header value."
+    message: "Provider auth header value is a literal: use a {vault://...} reference or !secret."
+    severity: error
+    given: ["$.ai_gateway_model_providers[*].config.auth.headers[*]", "$.ai_gateways[*].model_providers[*].config.auth.headers[*]"]
+    then:
+      field: value
+      function: schema
+      functionOptions: {schema: {oneOf: [{type: string, pattern: "^\\{vault://"}, {type: object}]}}
+
+  aigw-config-store-secret-not-literal:
+    description: "Config Store secret values must be written with !secret so they never appear in a plan."
+    message: "Config Store secret value is a literal: use !secret."
+    severity: error
+    given: ["$.ai_gateway_config_store_secrets[*]", "$.ai_gateways[*].config_stores[*].secrets[*]"]
+    then: {field: value, function: schema, functionOptions: {schema: {type: object}}}
+
+  # ---------- Data protection and logging ----------
+  aigw-model-payload-logging-explicit:
+    description: "State payload logging explicitly on every model (config.logging.payloads) so the default is never relied on."
+    message: "Model does not set config.logging.payloads."
+    severity: error
+    given: ["$.ai_gateway_models[*]", "$.ai_gateways[*].models[*]"]
+    then: {field: config.logging.payloads, function: defined}
+
+  aigw-model-payload-logging-off:
+    description: "Prompts and responses must not be logged by default (they carry personal data). Enable only through an exception process with sanitisation, short retention and tagging."
+    message: "Payload logging is enabled."
+    severity: error
+    given: ["$.ai_gateway_models[*]", "$.ai_gateways[*].models[*]"]
+    then: {field: config.logging.payloads, function: schema, functionOptions: {schema: {const: false}}}
+
+  aigw-mcp-no-payload-logging:
+    description: "MCP tool arguments and results must not be logged (audit events on, payloads off)."
+    message: "MCP payload logging is enabled."
+    severity: error
+    given: ["$.ai_gateway_mcp_servers[*].config.logging", "$.ai_gateways[*].mcp_servers[*].config.logging"]
+    then: {field: payloads, function: schema, functionOptions: {schema: {const: false}}}
+
+  aigw-mcp-audit-logging:
+    description: "Record who called which MCP tool: audits on."
+    message: "MCP server does not enable config.logging.audits."
+    severity: warn
+    given: ["$.ai_gateway_mcp_servers[?(@.type!='upstream-server')]", "$.ai_gateways[*].mcp_servers[?(@.type!='upstream-server')]"]
+    then: {field: config.logging.audits, function: truthy}
+
+  # ---------- Cost and abuse control ----------
+  aigw-target-max-tokens:
+    description: "Cap output length with max_tokens on every model target (runaway-cost and abuse protection). Targets that extend a template are checked where the template lives."
+    message: "Target does not set config.max_tokens."
+    severity: warn
+    given: ["$.ai_gateway_models[*].targets[?(!@._extends)]", "$.ai_gateways[*].models[*].targets[?(!@._extends)]"]
+    then: {field: config.max_tokens, function: truthy}
+
+  aigw-target-input-price:
+    description: "Set input_cost on every target (USD per 1M tokens): Konnect computes cost from your price, not a lagging default; budgets and chargeback depend on it."
+    message: "Target does not set config.input_cost."
+    severity: warn
+    given: ["$.ai_gateway_models[*].targets[?(!@._extends)]", "$.ai_gateways[*].models[*].targets[?(!@._extends)]"]
+    then: {field: config.input_cost, function: truthy}
+
+  aigw-target-output-price:
+    description: "Set output_cost on every target (USD per 1M tokens)."
+    message: "Target does not set config.output_cost."
+    severity: warn
+    given: ["$.ai_gateway_models[*].targets[?(!@._extends)]", "$.ai_gateways[*].models[*].targets[?(!@._extends)]"]
+    then: {field: config.output_cost, function: truthy}
+
+  aigw-model-owner-label:
+    description: "Every model carries labels.owner and labels.status so the catalogue, chargeback and reviews know who owns it."
+    message: "Model is missing labels.owner."
+    severity: warn
+    given: ["$.ai_gateway_models[*]", "$.ai_gateways[*].models[*]"]
+    then: [{field: labels.owner, function: truthy}, {field: labels.status, function: truthy}]
+
+  aigw-rla-explicit-strategy:
+    description: "Set the AI Rate Limiting Advanced strategy explicitly (redis for shared counters across pods, local only for development)."
+    message: "ai-rate-limiting-advanced does not set config.strategy."
+    severity: warn
+    given: ["$.ai_gateway_policies[?(@.type=='ai-rate-limiting-advanced')].config", "$.ai_gateways[*].policies[?(@.type=='ai-rate-limiting-advanced')].config"]
+    then: {field: strategy, function: defined}
+
+  aigw-rla-no-cluster-strategy:
+    description: "The `cluster` strategy needs a database that Konnect-managed data planes do not have: use redis (shared) or local."
+    message: "ai-rate-limiting-advanced uses the unsupported cluster strategy."
+    severity: error
+    given: ["$.ai_gateway_policies[?(@.type=='ai-rate-limiting-advanced')].config", "$.ai_gateways[*].policies[?(@.type=='ai-rate-limiting-advanced')].config"]
+    then: {field: strategy, function: pattern, functionOptions: {notMatch: "^cluster$"}}
+
+  # ---------- Guardrails ----------
+  aigw-guardrail-fail-closed:
+    description: "Mandatory guardrails fail closed: stop_on_error must not be false on guardrail and sanitizer policies."
+    message: "Guardrail policy sets stop_on_error: false (fails open)."
+    severity: error
+    given:
+      - "$.ai_gateway_policies[?(@.type=='ai-aws-guardrails' || @.type=='ai-azure-content-safety' || @.type=='ai-custom-guardrail' || @.type=='ai-sanitizer' || @.type=='ai-lakera-guard' || @.type=='ai-gcp-model-armor' || @.type=='ai-nvidia-nemo-guardrail')].config"
+      - "$.ai_gateways[*].policies[?(@.type=='ai-aws-guardrails' || @.type=='ai-azure-content-safety' || @.type=='ai-custom-guardrail' || @.type=='ai-sanitizer')].config"
+    then: {field: stop_on_error, function: schema, functionOptions: {schema: {not: {const: false}}}}
+
+  aigw-prompt-guard-has-patterns:
+    description: "An ai-prompt-guard policy without deny_patterns or allow_patterns does nothing."
+    message: "ai-prompt-guard has no deny_patterns."
+    severity: warn
+    given: ["$.ai_gateway_policies[?(@.type=='ai-prompt-guard')].config", "$.ai_gateways[*].policies[?(@.type=='ai-prompt-guard')].config"]
+    then: {field: deny_patterns, function: truthy}
+
+  aigw-semantic-cache-non-blocking:
+    description: "A cache outage must never block inference: set stop_on_failure: false on ai-semantic-cache (and never use it on streaming routes)."
+    message: "ai-semantic-cache does not set stop_on_failure: false."
+    severity: warn
+    given: ["$.ai_gateway_policies[?(@.type=='ai-semantic-cache')].config", "$.ai_gateways[*].policies[?(@.type=='ai-semantic-cache')].config"]
+    then:
+      - {field: stop_on_failure, function: defined}
+      - {field: stop_on_failure, function: schema, functionOptions: {schema: {const: false}}}
+
+  # =====================================================================================================================
+  # EXPANSION: credentials in policy config . Recursive descent does not evaluate in this linter, so the credential-bearing
+  # paths are enumerated. A value must be a {vault://...} reference or a !secret mapping.
+  # =====================================================================================================================
+  aigw-policy-password-not-literal:
+    description: "Redis, vector DB and proxy passwords in policy config must be vault references or !secret, never literals."
+    message: "A password in policy config is a literal: use {vault://...} or !secret."
+    severity: error
+    given:
+      - "$.ai_gateway_policies[*].config.redis"
+      - "$.ai_gateway_policies[*].config.vectordb.redis"
+      - "$.ai_gateway_policies[*].config.vectordb.pgvector"
+      - "$.ai_gateway_mcp_servers[*].config.proxy.auth"
+      - "$.ai_gateway_agents[*].config.proxy.auth"
+    then: {field: password, function: schema, functionOptions: {schema: {oneOf: [{type: string, pattern: "^\\{vault://"}, {type: object}]}}}
+
+  aigw-policy-auth-header-not-literal:
+    description: "Embedding, LLM-judge and transformer auth header values in policy config must be vault references or !secret."
+    message: "An auth header_value in policy config is a literal: use {vault://...} or !secret."
+    severity: error
+    given:
+      - "$.ai_gateway_policies[*].config.embeddings.auth"
+      - "$.ai_gateway_policies[*].config.llm.auth"
+      - "$.ai_gateway_policies[*].config.auth"
+    then: {field: header_value, function: schema, functionOptions: {schema: {oneOf: [{type: string, pattern: "^\\{vault://"}, {type: object}]}}}
+
+  aigw-policy-auth-param-not-literal:
+    description: "Query-parameter credentials (param_value) in policy config must be vault references or !secret."
+    message: "An auth param_value in policy config is a literal: use {vault://...} or !secret."
+    severity: error
+    given:
+      - "$.ai_gateway_policies[*].config.embeddings.auth"
+      - "$.ai_gateway_policies[*].config.llm.auth"
+      - "$.ai_gateway_policies[*].config.auth"
+    then: {field: param_value, function: schema, functionOptions: {schema: {oneOf: [{type: string, pattern: "^\\{vault://"}, {type: object}]}}}
+
+  aigw-policy-cloud-secret-not-literal:
+    description: "Cloud credentials inside policy LLM config (aws_secret_access_key, azure_client_secret, gcp_service_account_json) must be vault references or !secret."
+    message: "A cloud credential in policy config is a literal."
+    severity: error
+    given: ["$.ai_gateway_policies[*].config.llm.auth", "$.ai_gateway_policies[*].config.embeddings.auth", "$.ai_gateway_policies[?(@.type=='ai-aws-guardrails')].config"]
+    then:
+      - {field: aws_secret_access_key, function: schema, functionOptions: {schema: {oneOf: [{type: string, pattern: "^\\{vault://"}, {type: object}]}}}
+      - {field: azure_client_secret, function: schema, functionOptions: {schema: {oneOf: [{type: string, pattern: "^\\{vault://"}, {type: object}]}}}
+      - {field: gcp_service_account_json, function: schema, functionOptions: {schema: {oneOf: [{type: string, pattern: "^\\{vault://"}, {type: object}]}}}
+
+  aigw-upstream-aws-secret-not-literal:
+    description: "MCP server and agent upstream AWS auth secrets must be vault references or !secret."
+    message: "Upstream auth secret is a literal."
+    severity: error
+    given: ["$.ai_gateway_mcp_servers[*].config.upstream.auth", "$.ai_gateway_agents[*].config.upstream.auth"]
+    then:
+      - {field: secret_access_key, function: schema, functionOptions: {schema: {oneOf: [{type: string, pattern: "^\\{vault://"}, {type: object}]}}}
+      - {field: session_token, function: schema, functionOptions: {schema: {oneOf: [{type: string, pattern: "^\\{vault://"}, {type: object}]}}}
+
+  aigw-bedrock-no-static-keys:
+    description: "Prefer the runtime role, default credential chain or STS role assumption (assume_role_arn) to long-lived IAM keys for Bedrock."
+    message: "Bedrock provider uses static access keys."
+    severity: warn
+    given: ["$.ai_gateway_model_providers[?(@.type=='bedrock')].config.auth"]
+    then: [{field: access_key_id, function: undefined}, {field: secret_access_key, function: undefined}]
+
+  aigw-azure-managed-identity:
+    description: "Prefer Azure managed identity to a static client secret for Azure OpenAI targets."
+    message: "Azure provider uses a static client secret."
+    severity: info
+    given: ["$.ai_gateway_model_providers[?(@.type=='azure')].config.auth"]
+    then: {field: client_secret, function: undefined}
+
+  aigw-rla-no-deprecated-llm-providers:
+    description: "ai-rate-limiting-advanced `llm_providers` is deprecated: use `policies` (match + limits)."
+    message: "ai-rate-limiting-advanced uses the deprecated llm_providers."
+    severity: error
+    given: ["$.ai_gateway_policies[?(@.type=='ai-rate-limiting-advanced')].config", "$.ai_gateways[*].policies[?(@.type=='ai-rate-limiting-advanced')].config"]
+    then: {field: llm_providers, function: undefined}
+
+  # ---------------------------------------------------------------------------------------------------------------------
+  # Rate limiting and cost 
+  # ---------------------------------------------------------------------------------------------------------------------
+  aigw-rla-uses-policies:
+    description: "Configure limits through `policies[]` (match + limits), not the legacy provider list."
+    message: "ai-rate-limiting-advanced has no config.policies."
+    severity: warn
+    given: ["$.ai_gateway_policies[?(@.type=='ai-rate-limiting-advanced')].config"]
+    then: {field: policies, function: truthy}
+
+  aigw-rla-limit-counts-tokens:
+    description: "Every limit states what it counts: tokens_count_strategy (total_tokens, prompt_tokens, completion_tokens or cost)."
+    message: "A limit does not set tokens_count_strategy."
+    severity: warn
+    given: ["$.ai_gateway_policies[?(@.type=='ai-rate-limiting-advanced')].config.policies[*].limits[*]"]
+    then: {field: tokens_count_strategy, function: truthy}
+
+  aigw-rla-error-hide-providers:
+    description: "Do not tell callers which upstream provider is throttling them: error_hide_providers: true."
+    message: "ai-rate-limiting-advanced does not hide provider names in errors."
+    severity: warn
+    given: ["$.ai_gateway_policies[?(@.type=='ai-rate-limiting-advanced')].config"]
+    then: {field: error_hide_providers, function: truthy}
+
+  aigw-rla-redis-sync-rate:
+    description: "Redis counters sync at least once a second outside tests: sync_rate >= 1."
+    message: "sync_rate below 1 second."
+    severity: warn
+    given: ["$.ai_gateway_policies[?(@.type=='ai-rate-limiting-advanced')].config"]
+    then: {field: sync_rate, function: schema, functionOptions: {schema: {minimum: 1}}}
+
+  aigw-rla-namespace-explicit:
+    description: "Use one explicit counter namespace per consumer-group tier, so tiers never share or collide."
+    message: "ai-rate-limiting-advanced does not set config.namespace."
+    severity: warn
+    given: ["$.ai_gateway_policies[?(@.type=='ai-rate-limiting-advanced' && @.config.strategy=='redis')].config"]
+    then: {field: namespace, function: truthy}
+
+  aigw-rla-window-type-explicit:
+    description: "Choose the window type deliberately (sliding or fixed): it changes burst behaviour."
+    message: "ai-rate-limiting-advanced does not set window_type."
+    severity: info
+    given: ["$.ai_gateway_policies[?(@.type=='ai-rate-limiting-advanced')].config"]
+    then: {field: window_type, function: defined}
+
+  aigw-rla-redis-tls:
+    description: "Production Redis uses TLS and authentication; local development setups often do not. Surfaced as a hint."
+    message: "RLA Redis does not set ssl: true."
+    severity: hint
+    given: ["$.ai_gateway_policies[?(@.type=='ai-rate-limiting-advanced' && @.config.strategy=='redis')].config.redis"]
+    then: {field: ssl, function: truthy}
+
+  aigw-rla-local-strategy-per-pod:
+    description: "strategy: local counts per data plane pod: the real limit grows with the replica count. Development only."
+    message: "RLA uses the local (per-pod) strategy."
+    severity: hint
+    given: ["$.ai_gateway_policies[?(@.type=='ai-rate-limiting-advanced')].config"]
+    then: {field: strategy, function: pattern, functionOptions: {notMatch: "^local$"}}
+
+  aigw-model-request-body-size:
+    description: "State the maximum request body size per model instead of the 8 MB default (oversized prompts are an abuse and cost vector)."
+    message: "Model does not set config.max_request_body_size."
+    severity: info
+    given: ["$.ai_gateway_models[*]", "$.ai_gateways[*].models[*]"]
+    then: {field: config.max_request_body_size, function: defined}
+
+  # ---------------------------------------------------------------------------------------------------------------------
+  # Routing, retries, circuit breaker 
+  # ---------------------------------------------------------------------------------------------------------------------
+  aigw-target-no-auth-override:
+    description: "Client-supplied provider credentials (BYO key) stay off unless explicitly approved: allow_auth_override must not be true."
+    message: "Target allows client-supplied credentials (allow_auth_override: true)."
+    severity: error
+    given: ["$.ai_gateway_models[*].targets[*]", "$.ai_gateways[*].models[*].targets[*]"]
+    then: {field: allow_auth_override, function: schema, functionOptions: {schema: {const: false}}}
+
+  aigw-multi-target-needs-balancer:
+    description: "A model with more than one target needs an explicit balancer (algorithm, retries, failover criteria, circuit breaker)."
+    message: "Model has several targets but no config.balancer."
+    severity: warn
+    given: ["$.ai_gateway_models[?(@.targets.length > 1)]"]
+    then: {field: config.balancer, function: defined}
+
+  aigw-balancer-circuit-breaker:
+    description: "Enable the circuit breaker on multi-target models: max_fails >= 1 (off by default), with fail_timeout."
+    message: "Balancer does not set max_fails (circuit breaker off)."
+    severity: warn
+    given: ["$.ai_gateway_models[?(@.targets.length > 1)].config.balancer"]
+    then: [{field: max_fails, function: schema, functionOptions: {schema: {minimum: 1}}}, {field: fail_timeout, function: defined}]
+
+  aigw-balancer-retries-bounded:
+    description: "Every retry re-sends the whole prompt and its cost: cap balancer retries at 3."
+    message: "Balancer retries exceed 3."
+    severity: warn
+    given: ["$.ai_gateway_models[*].config.balancer"]
+    then: {field: retries, function: schema, functionOptions: {schema: {maximum: 3}}}
+
+  aigw-balancer-failover-on-429:
+    description: "Provider rate limiting (429) is the most common failure: include http_429 in failover_criteria."
+    message: "failover_criteria does not include http_429."
+    severity: warn
+    given: ["$.ai_gateway_models[*].config.balancer"]
+    then: {field: failover_criteria, function: schema, functionOptions: {schema: {type: array, contains: {const: http_429}}}}
+
+  aigw-balancer-failover-non-idempotent:
+    description: "LLM calls are POST requests and are not retried on another target unless failover_criteria includes non_idempotent."
+    message: "failover_criteria does not include non_idempotent."
+    severity: warn
+    given: ["$.ai_gateway_models[*].config.balancer"]
+    then: {field: failover_criteria, function: schema, functionOptions: {schema: {type: array, contains: {const: non_idempotent}}}}
+
+  aigw-streaming-incompatible-policy:
+    description: "Response-transforming and caching policies break streaming (buffering, hangs, truncation): never attach them to a streaming model. Surfaced as a hint wherever one is declared."
+    message: "Policy is not streaming-compatible: confirm no streaming model uses it."
+    severity: hint
+    given: ["$.ai_gateway_policies[?(@.type=='ai-response-transformer' || @.type=='response-transformer' || @.type=='response-transformer-advanced' || @.type=='proxy-cache' || @.type=='proxy-cache-advanced')]"]
+    then: {field: type, function: falsy}
+
+  # ---------------------------------------------------------------------------------------------------------------------
+  # Semantic cache 
+  # ---------------------------------------------------------------------------------------------------------------------
+  aigw-cache-ttl-explicit:
+    description: "Set cache_ttl deliberately from how stale an answer may be: the default is 300 seconds."
+    message: "ai-semantic-cache does not set cache_ttl."
+    severity: warn
+    given: ["$.ai_gateway_policies[?(@.type=='ai-semantic-cache')].config"]
+    then: {field: cache_ttl, function: defined}
+
+  aigw-cache-no-bypass-trust:
+    description: "cache_control: true honours upstream no-cache and bypass signals; trust them only if you control the origin."
+    message: "ai-semantic-cache honours cache-control bypass."
+    severity: warn
+    given: ["$.ai_gateway_policies[?(@.type=='ai-semantic-cache')].config"]
+    then: {field: cache_control, function: schema, functionOptions: {schema: {const: false}}}
+
+  aigw-cache-tight-threshold:
+    description: "Start with a tight similarity threshold (cosine distance 0.1) and widen only after reviewing sampled hits: near-synonyms can carry different meanings."
+    message: "Semantic cache threshold is looser than 0.2."
+    severity: warn
+    given: ["$.ai_gateway_policies[?(@.type=='ai-semantic-cache')].config.vectordb"]
+    then: {field: threshold, function: schema, functionOptions: {schema: {maximum: 0.2}}}
+
+  aigw-cache-has-vectordb:
+    description: "Semantic cache and semantic guards need embeddings and a vector store configured."
+    message: "Policy is missing embeddings or vectordb."
+    severity: warn
+    given: ["$.ai_gateway_policies[?(@.type=='ai-semantic-cache' || @.type=='ai-semantic-prompt-guard')].config"]
+    then: [{field: embeddings, function: defined}, {field: vectordb, function: defined}]
+
+  # ---------------------------------------------------------------------------------------------------------------------
+  # Guardrails, sanitiser 
+  # ---------------------------------------------------------------------------------------------------------------------
+  aigw-sanitizer-redact-mode:
+    description: "State the sanitiser replacement mode: placeholder for regulated data, synthetic only for test."
+    message: "ai-sanitizer does not set redact_type."
+    severity: info
+    given: ["$.ai_gateway_policies[?(@.type=='ai-sanitizer')].config"]
+    then: {field: redact_type, function: defined}
+
+  aigw-guardrail-mode-explicit:
+    description: "State where the guardrail runs (guarding_mode INPUT, OUTPUT or BOTH) instead of relying on the default."
+    message: "Guardrail does not set guarding_mode."
+    severity: warn
+    given: ["$.ai_gateway_policies[?(@.type=='ai-aws-guardrails' || @.type=='ai-azure-content-safety' || @.type=='ai-custom-guardrail')].config"]
+    then: {field: guarding_mode, function: defined}
+
+  aigw-custom-guardrail-timeout:
+    description: "A custom guardrail is a dependency in the request path: set its timeout from the service's 99th-percentile latency."
+    message: "ai-custom-guardrail does not set timeout."
+    severity: warn
+    given: ["$.ai_gateway_policies[?(@.type=='ai-custom-guardrail')].config"]
+    then: {field: timeout, function: defined}
+
+  aigw-bedrock-guardrail-pinned:
+    description: "Pin the Bedrock Guardrail identifier, version and region explicitly (a DRAFT version is not a production control)."
+    message: "ai-aws-guardrails is missing guardrails_id, guardrails_version or aws_region."
+    severity: error
+    given: ["$.ai_gateway_policies[?(@.type=='ai-aws-guardrails')].config"]
+    then: [{field: guardrails_id, function: truthy}, {field: guardrails_version, function: truthy}, {field: aws_region, function: truthy}]
+
+  aigw-semantic-guard-has-rules:
+    description: "A semantic prompt guard without rules does nothing."
+    message: "ai-semantic-prompt-guard has no rules."
+    severity: warn
+    given: ["$.ai_gateway_policies[?(@.type=='ai-semantic-prompt-guard')].config"]
+    then: {field: rules, function: truthy}
+
+  # ---------------------------------------------------------------------------------------------------------------------
+  # Identity 
+  # ---------------------------------------------------------------------------------------------------------------------
+  aigw-oidc-audience-required:
+    description: "Accept only tokens issued for this gateway: audience_required must be set on every openid-connect strategy."
+    message: "openid-connect strategy does not set audience_required."
+    severity: error
+    given: ["$.ai_gateway_auth_strategies[?(@.type=='openid-connect')].config", "$.ai_gateways[*].auth_strategies[?(@.type=='openid-connect')].config"]
+    then: {field: audience_required, function: truthy}
+
+  aigw-oidc-issuer:
+    description: "State the issuer explicitly."
+    message: "openid-connect strategy does not set issuer."
+    severity: error
+    given: ["$.ai_gateway_auth_strategies[?(@.type=='openid-connect')].config", "$.ai_gateways[*].auth_strategies[?(@.type=='openid-connect')].config"]
+    then: {field: issuer, function: truthy}
+
+  aigw-oidc-verify-tls:
+    description: "Never disable TLS verification towards the identity provider."
+    message: "openid-connect ssl_verify is false."
+    severity: error
+    given: ["$.ai_gateway_auth_strategies[?(@.type=='openid-connect')].config", "$.ai_gateways[*].auth_strategies[?(@.type=='openid-connect')].config"]
+    then: {field: ssl_verify, function: schema, functionOptions: {schema: {const: true}}}
+
+  aigw-oidc-groups-claim:
+    description: "Let directory groups drive Consumer Groups: set consumer_groups_claim so access follows membership."
+    message: "openid-connect strategy does not map a groups claim."
+    severity: hint
+    given: ["$.ai_gateway_auth_strategies[?(@.type=='openid-connect')].config"]
+    then: {field: consumer_groups_claim, function: truthy}
+
+  aigw-keyauth-hide-credentials:
+    description: "key-auth must not forward the caller's key upstream: hide_credentials: true."
+    message: "key-auth does not set hide_credentials: true."
+    severity: error
+    given: ["$.ai_gateway_auth_strategies[?(@.type=='key-auth')].config", "$.ai_gateways[*].auth_strategies[?(@.type=='key-auth')].config"]
+    then: {field: hide_credentials, function: truthy}
+
+  aigw-mcp-acl-attribute:
+    description: "State what MCP access rules are evaluated against (consumer or oauth_access_token)."
+    message: "MCP server does not set access.acl_attribute_type."
+    severity: error
+    given: ["$.ai_gateway_mcp_servers[?(@.type!='upstream-server')]", "$.ai_gateways[*].mcp_servers[?(@.type!='upstream-server')]"]
+    then: {field: access.acl_attribute_type, function: truthy}
+
+  aigw-mcp-claim-field:
+    description: "With oauth_access_token ACLs, name the token claim used as the subject (access_token_claim_field)."
+    message: "oauth_access_token ACLs need access_token_claim_field."
+    severity: error
+    given: ["$.ai_gateway_mcp_servers[?(@.access.acl_attribute_type=='oauth_access_token')].access"]
+    then: {field: access_token_claim_field, function: truthy}
+
+  aigw-mcp-allowed-versions:
+    description: "Pin the accepted MCP protocol versions on listener servers."
+    message: "MCP listener does not set config.allowed_versions."
+    severity: hint
+    given: ["$.ai_gateway_mcp_servers[?(@.type=='listener' || @.type=='conversion-listener')].config"]
+    then: {field: allowed_versions, function: truthy}
+
+  aigw-agent-payload-logging-off:
+    description: "Agent (A2A) payloads must not be logged by default."
+    message: "Agent payload logging is enabled."
+    severity: error
+    given: ["$.ai_gateway_agents[*].config.logging", "$.ai_gateways[*].agents[*].config.logging"]
+    then: {field: payloads, function: schema, functionOptions: {schema: {const: false}}}
+
+  aigw-agent-statistics-logging:
+    description: "Record usage statistics (metadata, never bodies) on agents."
+    message: "Agent does not enable config.logging.statistics."
+    severity: info
+    given: ["$.ai_gateway_agents[*]", "$.ai_gateways[*].agents[*]"]
+    then: {field: config.logging.statistics, function: truthy}
+
+  # ---------------------------------------------------------------------------------------------------------------------
+  # Egress and transport 
+  # ---------------------------------------------------------------------------------------------------------------------
+  aigw-target-upstream-tls:
+    description: "Model targets with an explicit upstream_url use https (no plain http to a provider or self-hosted model across a shared network)."
+    message: "Target upstream_url is plain http."
+    severity: warn
+    given: ["$.ai_gateway_models[*].targets[*].config", "$.ai_gateways[*].models[*].targets[*].config"]
+    then: {field: upstream_url, function: pattern, functionOptions: {notMatch: "^http://"}}
+
+  aigw-policy-upstream-tls:
+    description: "Embedding and LLM upstream URLs inside policy config use https."
+    message: "Policy upstream_url is plain http."
+    severity: warn
+    given: ["$.ai_gateway_policies[*].config.embeddings.model.options", "$.ai_gateway_policies[*].config.llm.model.options"]
+    then: {field: upstream_url, function: pattern, functionOptions: {notMatch: "^http://"}}
+
+  aigw-mcp-upstream-tls:
+    description: "MCP and agent upstream URLs use https."
+    message: "MCP or agent upstream url is plain http."
+    severity: warn
+    given: ["$.ai_gateway_mcp_servers[*].config", "$.ai_gateway_agents[*].config"]
+    then: {field: url, function: pattern, functionOptions: {notMatch: "^http://"}}
+
+  # ---------------------------------------------------------------------------------------------------------------------
+  # Observability 
+  # ---------------------------------------------------------------------------------------------------------------------
+  aigw-prometheus-ai-metrics:
+    description: "The AI metrics are opt-in: without ai_metrics: true none of the ai_llm_* series (requests, tokens, cost, latency) exist."
+    message: "prometheus policy does not enable ai_metrics."
+    severity: error
+    given: ["$.ai_gateway_policies[?(@.type=='prometheus')].config", "$.ai_gateways[*].policies[?(@.type=='prometheus')].config"]
+    then: {field: ai_metrics, function: truthy}
+
+  aigw-prometheus-global:
+    description: "Telemetry policies are global so every model, agent and MCP server is covered with no per-tenant setup."
+    message: "prometheus or opentelemetry policy is not global."
+    severity: warn
+    given: ["$.ai_gateway_policies[?(@.type=='prometheus' || @.type=='opentelemetry')]"]
+    then: {field: global, function: truthy}
+
+  aigw-prometheus-cardinality:
+    description: "per_consumer multiplies label cardinality (consumer x model x provider): choose a cardinality policy before enabling at scale."
+    message: "per_consumer is enabled: review label cardinality."
+    severity: hint
+    given: ["$.ai_gateway_policies[?(@.type=='prometheus')].config"]
+    then: {field: per_consumer, function: schema, functionOptions: {schema: {const: false}}}
+
+  aigw-otel-propagation:
+    description: "Standardise trace propagation (W3C) so one trace spans the application and the gateway."
+    message: "opentelemetry policy does not set propagation."
+    severity: warn
+    given: ["$.ai_gateway_policies[?(@.type=='opentelemetry')].config"]
+    then: {field: propagation, function: defined}
+
+  aigw-otel-sampling:
+    description: "State the trace sampling rate explicitly."
+    message: "opentelemetry policy does not set sampling_rate."
+    severity: info
+    given: ["$.ai_gateway_policies[?(@.type=='opentelemetry')].config"]
+    then: {field: sampling_rate, function: defined}
+
+  aigw-otel-resource-attributes:
+    description: "Name the service in resource_attributes (service.name, deployment.environment) so telemetry from several gateways is separable."
+    message: "opentelemetry policy does not set resource_attributes."
+    severity: info
+    given: ["$.ai_gateway_policies[?(@.type=='opentelemetry')].config"]
+    then: {field: resource_attributes, function: truthy}
+
+  # ---------------------------------------------------------------------------------------------------------------------
+  # Tenancy and governance 
+  # ---------------------------------------------------------------------------------------------------------------------
+  aigw-group-labels:
+    description: "Consumer Groups carry labels (owner team, cost centre, environment, migration state): they are the chargeback and ownership keys."
+    message: "Consumer Group has no labels."
+    severity: warn
+    given: ["$.ai_gateway_consumer_groups[*]", "$.ai_gateways[*].consumer_groups[*]"]
+    then: {field: labels, function: truthy}
+
+  aigw-model-acl-review:
+    description: "Tenant models restrict who may call them (access.acls.allow); shared platform models are the deliberate exception. Surfaced as a hint."
+    message: "Model has no access.acls."
+    severity: hint
+    given: ["$.ai_gateway_models[*]", "$.ai_gateways[*].models[*]"]
+    then: {field: access.acls, function: truthy}
+
+  aigw-global-guardrail-review:
+    description: "A global guardrail applies to every model, agent and MCP server including ones added later: confirm that is intended."
+    message: "Guardrail policy is global."
+    severity: hint
+    given: ["$.ai_gateway_policies[?(@.type=='ai-prompt-guard' || @.type=='ai-aws-guardrails' || @.type=='ai-custom-guardrail' || @.type=='ai-sanitizer')]"]
+    then: {field: global, function: schema, functionOptions: {schema: {const: false}}}
+
+  aigw-policy-enabled-explicit:
+    description: "State `enabled` on every policy so a disabled control is visible in review."
+    message: "Policy does not set enabled."
+    severity: info
+    given: ["$.ai_gateway_policies[*]", "$.ai_gateways[*].policies[*]"]
+    then: {field: enabled, function: defined}
+
+  aigw-rla-identifier-explicit:
+    description: "Choose the rate-limit key deliberately (consumer-group for per-application budgets, consumer for per-workload, header for per-user): it decides fairness and who gets blamed."
+    message: "ai-rate-limiting-advanced does not set config.identifier."
+    severity: warn
+    given: ["$.ai_gateway_policies[?(@.type=='ai-rate-limiting-advanced')].config"]
+    then: {field: identifier, function: defined}

@@ -1,0 +1,26 @@
+# Deliberately non-compliant. Each comment names what should be caught.
+_defaults:
+  kongctl:
+    namespace: team-b                    # 1. another team's namespace
+control_planes:
+  - ref: cp-borrowed
+    name: borrowed
+    labels:
+      owner: team-b-ops   # 2. another team's owner, cost centre, service ID and application ID
+      cost_centre: 30CD40
+      service_id: SVC-B
+      application_id: APP-B
+  - ref: cp-incomplete
+    name: incomplete
+    labels:
+      owner: team-a-ops                     # 3. service_id and application_id missing
+      cost_centre: 10AB20
+  - ref: cp-bad-format
+    name: bad-format
+    labels: {owner: team-a-ops, cost_centre: 10-AB-20, service_id: SVC-A, application_id: APP-A}   # 4. cost centre in the wrong format
+  - ref: cp-unlabelled
+    name: unlabelled                       # 5. no labels at all
+apis:                                      # 6. team-a has no role for APIs
+  - {ref: api-1, name: Orders API}
+portals:                                   # 7. nor for portals
+  - {ref: portal-1, name: Dev Portal}

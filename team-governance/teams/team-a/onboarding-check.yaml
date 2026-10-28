@@ -1,0 +1,20 @@
+# Checks team-a's onboarding file: everything in the onboarding baseline, plus that each system account
+# belongs to one of team-a's own groups. Keep the group names in step with onboarding/team-a.yaml.
+# Run from the repository root:  kongctl lint -f team-governance/onboarding/team-a.yaml -r team-governance/teams/team-a/onboarding-check.yaml -F warn
+extends:
+  - team-governance/rulesets/onboarding-baseline.yaml
+
+rules:
+  team-a-account-membership:
+    description: "Every system account belongs to one of team-a's groups"
+    message: "team_membership must be one of: team_a_ops, team_a_read"
+    severity: error
+    given: "$.system_accounts[*].team_membership"
+    then: {function: pattern, functionOptions: {match: "^(team_a_ops|team_a_read)$"}}
+
+  team-a-group-names:
+    description: "Groups defined in the file belong to team-a"
+    message: "Group names under teams must start with team_a_"
+    severity: error
+    given: "$.teams.*~"
+    then: {function: pattern, functionOptions: {match: "^team_a_"}}

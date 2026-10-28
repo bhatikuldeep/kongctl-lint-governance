@@ -1,0 +1,8 @@
+# Sits in the team-a team's repository but claims to be team-b: its namespace and labels are copied from team-b.
+_defaults:
+  kongctl:
+    namespace: team-b
+control_planes:
+  - ref: sneaky
+    name: sneaky
+    labels: {owner: team-b-ops, cost_centre: 30CD40, service_id: SVC-B, application_id: APP-B}

@@ -1,0 +1,20 @@
+# Checks team-b's onboarding file: everything in the onboarding baseline, plus that each system account
+# belongs to one of team-b's own groups. Keep the group names in step with onboarding/team-b.yaml.
+# Run from the repository root:  kongctl lint -f team-governance/onboarding/team-b.yaml -r team-governance/teams/team-b/onboarding-check.yaml -F warn
+extends:
+  - team-governance/rulesets/onboarding-baseline.yaml
+
+rules:
+  team-b-account-membership:
+    description: "Every system account belongs to one of team-b's groups"
+    message: "team_membership must be one of: team_b_ops"
+    severity: error
+    given: "$.system_accounts[*].team_membership"
+    then: {function: pattern, functionOptions: {match: "^(team_b_ops)$"}}
+
+  team-b-group-names:
+    description: "Groups defined in the file belong to team-b"
+    message: "Group names under teams must start with team_b_"
+    severity: error
+    given: "$.teams.*~"
+    then: {function: pattern, functionOptions: {match: "^team_b_"}}

@@ -1,0 +1,33 @@
+# Team B onboarding configuration (synthetic). Owner, cost centre, service ID and application ID are placeholders.
+type: konnect.team
+team:
+  name: "team-b"
+  description: "Team B team"
+  labels:
+    cost_centre: "30CD40"
+    owner: "team-b-ops"
+    service_id: "SVC-B"
+    application_id: "APP-B"
+
+notification-config:
+  email: team-b-ops@example.com
+
+teams:
+  team_b_ops:
+    group_id: "00000000-0000-0000-0000-00000000000c"
+    access: ops
+    resource_types: "Control Planes"
+
+system_accounts:
+  - name: team_b_nonprod
+    team_membership: team_b_ops
+    vault-location: "secrets/team-b/nonprod"
+    environments: [dev, eng, staging]
+    roles:
+      - { "entity_type": "Control Planes", "role": "Creator" }
+  - name: team_b_prod
+    team_membership: team_b_ops
+    vault-location: "secrets/team-b/prod"
+    environments: [prod]
+    roles:
+      - { "entity_type": "Control Planes", "role": "Creator" }

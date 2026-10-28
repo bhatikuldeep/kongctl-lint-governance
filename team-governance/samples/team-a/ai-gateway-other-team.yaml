@@ -1,0 +1,41 @@
+# Team A's AI Gateway file with another team's namespace: passes the AI Gateway rules, fails Team A's rules.
+_defaults:
+  kongctl:
+    namespace: team-b-ai
+ai_gateways:
+  - ref: gw
+    name: gw
+    deployment_type: hybrid
+    min_runtime_version: "2.2"
+    runtime_auto_upgrade: false
+    labels: {owner: team-a-ops, env: prod}
+ai_gateway_models:
+  - ref: chat
+    name: chat
+    type: model
+    access: {auth_strategies: [key-auth-strategy]}
+    labels: {owner: team-a-ops, status: approved}
+    config:
+      logging: {payloads: false, statistics: true}
+      max_request_body_size: 1048576
+      balancer: {algorithm: round-robin, retries: 2, failover_criteria: [error, timeout, http_429, non_idempotent]}
+    targets:
+      - provider: provider-a
+        name: primary
+        config: {type: openai, upstream_url: "https://llm-a.example.invalid", max_tokens: 1024, input_cost: 0.5, output_cost: 1.5}
+ai_gateway_auth_strategies:
+  - ref: key-auth-strategy
+    type: key-auth
+    name: key-auth-strategy
+    config: {hide_credentials: true}
+ai_gateway_mcp_servers:
+  - ref: tools
+    name: tools
+    type: listener
+    access:
+      auth_strategies: [key-auth-strategy]
+      acl_attribute_type: consumer
+      default_tool_acls: {allow: [tool-admins]}
+    config:
+      url: "https://mcp.example.invalid"
+      logging: {audits: true, payloads: false}

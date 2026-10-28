@@ -1,0 +1,39 @@
+# Synthetic first draft of an onboarding file, with the mistakes first drafts typically contain.
+# Not valid on purpose: run it through rulesets/onboarding-baseline.yaml to see every finding.
+type: konnect.team
+team:
+ name: "team-c"
+ description: "Team C"
+ labels:
+   cost_centre: "50EF60"
+   owner: "Team C Ops"
+
+notification-config:
+ email: team-c-ops@example.com
+
+teams:
+ team_c_ops:
+   group_id: "00000000-0000-0000-0000-00000000000d"
+   access: ops
+   resource_types: "Control Planes"
+
+system_accounts:
+ - team_c_nonprod:
+   team_membership: team_c_ops
+   vault-location: "secrets/team-c"
+   environments: { dev, eng, staging }
+   roles:
+     - { "entity_type": "Control Planes", "role": "Creator" }
+
+ - team_c_prod:
+   team_membership: team_c_ops
+   vault-location: "secrets/team-c"
+   environments: { prod }
+   roles:
+     - { "entity_type": "Control Planes", "role": "Creator" }
+
+ - team_c_orphan:
+   vault-location: "secrets/team-c-orphan"
+   environments: { dev }
+   roles:
+     - { "entity_type": "Control Planes", "role": "Creator" }

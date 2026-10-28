@@ -1,0 +1,13 @@
+# Deliberately breaks Konnect's label rules (labels would be rejected at apply time). Each comment names the problem.
+_defaults:
+  kongctl:
+    namespace: team-a-dev
+control_planes:
+  - ref: cp-bad-labels
+    name: bad-labels
+    labels:
+      owner: Team A Ops                     # 1. a space is not allowed in a label value
+      cost_centre: 10AB20
+      service_id: SVC-A
+      application_id: APP-A
+      konnect_env: dev                     # 2. the key starts with a reserved prefix

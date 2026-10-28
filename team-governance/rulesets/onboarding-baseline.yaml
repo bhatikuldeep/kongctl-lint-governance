@@ -1,0 +1,146 @@
+# Checks any team onboarding configuration (type: konnect.team),  using an illustrative format; adapt the field names to yours.
+#   kongctl lint -f team-governance/onboarding/team-a.yaml -r team-governance/rulesets/onboarding-baseline.yaml -F warn
+# Change the formats and allowed values to match your standards.
+rules:
+  onboarding-type:
+    description: "The file declares its type"
+    message: "type must be konnect.team"
+    severity: error
+    given: "$"
+    then: {field: type, function: pattern, functionOptions: {match: "^konnect\\.team$"}}
+
+  onboarding-team-name:
+    description: "The team has a lowercase name; it is the namespace prefix"
+    message: "team.name is required: lowercase letters, digits and hyphens"
+    severity: error
+    given: "$.team"
+    then:
+      - {field: name, function: truthy}
+      - {field: name, function: pattern, functionOptions: {match: "^[a-z][a-z0-9-]*$"}}
+
+  onboarding-label-owner:
+    description: "Owner is mandatory"
+    message: "team.labels.owner is required"
+    severity: error
+    given: "$.team.labels"
+    then: {field: owner, function: truthy}
+
+  onboarding-label-cost-centre:
+    description: "Cost centre is mandatory and has the agreed format (2 digits, 2 capitals, 2 digits, for example 10AB20)"
+    message: "team.labels.cost_centre is required and must look like 10AB20"
+    severity: error
+    given: "$.team.labels"
+    then:
+      - {field: cost_centre, function: truthy}
+      - {field: cost_centre, function: pattern, functionOptions: {match: "^[0-9]{2}[A-Z]{2}[0-9]{2}$"}}
+
+  onboarding-label-service_id:
+    description: "Service ID is mandatory metadata"
+    message: "team.labels.service_id is required"
+    severity: error
+    given: "$.team.labels"
+    then: {field: service_id, function: truthy}
+
+  onboarding-label-application-id:
+    description: "Application ID is mandatory metadata"
+    message: "team.labels.application_id is required"
+    severity: error
+    given: "$.team.labels"
+    then: {field: application_id, function: truthy}
+
+  onboarding-label-values-valid:
+    description: "Team labels become Konnect resource labels, so their values must be valid labels"
+    message: "team.labels value is not a valid Konnect label value: letters, digits, - _ . only (no spaces or @), max 63 characters"
+    severity: error
+    given: "$.team.labels.*"
+    then: {function: pattern, functionOptions: {match: "^[a-zA-Z0-9]([a-zA-Z0-9._-]{0,61}[a-zA-Z0-9])?$"}}
+
+  onboarding-label-keys-valid:
+    description: "Team label keys must not use a prefix reserved by Kong"
+    message: "team.labels key must not start with kong, konnect, insomnia, mesh, kic, kuma or _"
+    severity: error
+    given: "$.team.labels.*~"
+    then: {function: pattern, functionOptions: {notMatch: "^(kong|konnect|insomnia|mesh|kic|kuma|_)"}}
+
+
+  onboarding-notification-email:
+    description: "A notification mailbox is required"
+    message: "notification-config.email must be an email address"
+    severity: error
+    given: "$.notification-config"
+    then:
+      - {field: email, function: truthy}
+      - {field: email, function: pattern, functionOptions: {match: "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"}}
+
+  onboarding-group-fields:
+    description: "Each identity-provider group mapping has an id, an access level and resource types"
+    message: "Each entry under teams needs group_id, resource_types and access of ops or read"
+    severity: error
+    given: "$.teams[*]"
+    then:
+      - {field: group_id, function: truthy}
+      - {field: resource_types, function: truthy}
+      - {field: access, function: pattern, functionOptions: {match: "^(ops|read)$"}}
+
+  onboarding-account-name:
+    description: "Every system account has a name field (not a bare key)"
+    message: "System account has no name: write 'name: <account>' instead of '- <account>:'"
+    severity: error
+    given: "$.system_accounts[*]"
+    then: {field: name, function: truthy}
+
+  onboarding-account-team-membership:
+    description: "Every system account belongs to a group in the teams section"
+    message: "System account has no team_membership"
+    severity: error
+    given: "$.system_accounts[*]"
+    then: {field: team_membership, function: truthy}
+
+  onboarding-account-vault-location:
+    description: "Every system account says where its secret lives"
+    message: "System account has no vault-location"
+    severity: error
+    given: "$.system_accounts[*]"
+    then: {field: vault-location, function: truthy}
+
+  onboarding-account-environments-list:
+    description: "Environments are a list, not a YAML mapping such as { dev, prod }"
+    message: "environments must be a list: [dev, prod]"
+    severity: error
+    given: "$.system_accounts[*]"
+    then: {field: environments, function: schema, functionOptions: {schema: {type: array}}}
+
+  onboarding-account-environments-known:
+    description: "Only known environments"
+    message: "Unknown environment (allowed: dev, eng, staging, prod)"
+    severity: error
+    given: "$.system_accounts[*].environments[*]"
+    then: {function: pattern, functionOptions: {match: "^(dev|eng|staging|prod)$"}}
+
+  onboarding-account-entity-types:
+    description: "Roles only name recognised entity types"
+    message: "Unknown entity_type (allowed: Control Planes)"
+    severity: error
+    given: "$.system_accounts[*].roles[*].entity_type"
+    then: {function: pattern, functionOptions: {match: "^(Control Planes)$"}}
+
+  onboarding-account-roles:
+    description: "Roles are from the approved list"
+    message: "Unknown role (allowed: Creator, Viewer)"
+    severity: error
+    given: "$.system_accounts[*].roles[*].role"
+    then: {function: pattern, functionOptions: {match: "^(Creator|Viewer)$"}}
+
+  onboarding-prod-vault-path:
+    description: "A production account keeps its secret under a /prod path"
+    message: "Production account vault-location must end with /prod"
+    severity: warn
+    given: "$.system_accounts[?(@.environments[0]=='prod')]"
+    then: {field: vault-location, function: pattern, functionOptions: {match: "/prod$"}}
+
+  onboarding-nonprod-vault-path:
+    description: "A non-production account never shares the production secret path"
+    message: "Non-production account vault-location must end with /nonprod"
+    severity: warn
+    given: "$.system_accounts[?(@.environments[0]!='prod')]"
+    then: {field: vault-location, function: pattern, functionOptions: {match: "/nonprod$"}}

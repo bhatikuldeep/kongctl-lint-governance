@@ -1,0 +1,61 @@
+ai_gateways:
+  - ref: gw
+    name: gw
+    deployment_type: hybrid
+ai_gateway_models:
+  - ref: m1
+    name: m1
+    type: model
+    config:
+      logging: {payloads: true}
+      balancer: {algorithm: round-robin, retries: 9, failover_criteria: [error, timeout]}
+    targets:
+      - {provider: p, name: a, allow_auth_override: true, config: {type: openai, upstream_url: "http://llm.example.invalid"}}
+      - {provider: p, name: b, config: {type: openai}}
+ai_gateway_model_providers:
+  - ref: bp
+    type: bedrock
+    config: {auth: {type: aws, access_key_id: EXAMPLE-ACCESS-KEY-ID, secret_access_key: abc}}
+  - ref: az
+    type: azure
+    config: {auth: {type: azure, client_secret: literal-secret}}
+  - ref: oa
+    type: openai
+    config: {auth: {type: basic, headers: [{name: Authorization, value: "Bearer literal"}]}}
+ai_gateway_auth_strategies:
+  - {ref: o1, type: openid-connect, name: o1, config: {ssl_verify: false}}
+  - {ref: k1, type: key-auth, name: k1, config: {hide_credentials: false}}
+ai_gateway_consumer_groups:
+  - {ref: g1, name: g1}
+ai_gateway_policies:
+  - {ref: rla, type: ai-rate-limiting-advanced, config: {strategy: redis, sync_rate: 0, llm_providers: [{name: openai, limit: [1], window_size: [60]}], redis: {host: h, password: lit}}}
+  - {ref: rla2, type: ai-rate-limiting-advanced, config: {strategy: local, policies: [{limits: [{limit: 10, window_size: 60}]}]}}
+  - ref: cache
+    type: ai-semantic-cache
+    global: false
+    config: {cache_control: true, vectordb: {threshold: 0.9, redis: {host: h, password: lit}}, embeddings: {model: {options: {upstream_url: "http://emb"}}, auth: {header_value: "Bearer lit"}}}
+  - {ref: san, type: ai-sanitizer, config: {stop_on_error: false}}
+  - {ref: awsg, type: ai-aws-guardrails, config: {guardrails_id: x}}
+  - {ref: cg, type: ai-custom-guardrail, config: {stop_on_error: true}}
+  - {ref: sg, type: ai-semantic-prompt-guard, config: {}}
+  - {ref: rt, type: ai-response-transformer, config: {}}
+  - {ref: prom, type: prometheus, global: false, config: {per_consumer: true}}
+  - {ref: otel, type: opentelemetry, global: false, config: {}}
+  - {ref: llm, type: ai-llm-as-judge, config: {llm: {auth: {header_value: "Bearer lit", aws_secret_access_key: plain}}}}
+ai_gateway_mcp_servers:
+  - ref: mcp
+    type: listener
+    config: {url: "http://mcp", logging: {payloads: true}, upstream: {auth: {secret_access_key: plain}}}
+    access: {acl_attribute_type: oauth_access_token}
+ai_gateway_agents:
+  - ref: ag
+    type: a2a
+    config: {url: "http://agent", logging: {payloads: true}}
+ai_gateway_consumers:
+  - ref: c1
+    name: c1
+    type: api-key
+    credentials:
+      - {name: k, api_key: EXAMPLE_NOT_A_REAL_KEY_0000000000, ttl: 0}
+ai_gateway_config_store_secrets:
+  - {ref: s1, key: k, value: literalsecretvalue}

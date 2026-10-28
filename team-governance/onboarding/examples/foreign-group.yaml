@@ -1,0 +1,39 @@
+# Deliberately broken: a team-b group has been added to the team-a file.
+# Synthetic example based on onboarding/team-a.yaml. Lines marked FIX show what a first draft would typically get wrong.
+type: konnect.team
+team:
+  name: "team-a"
+  description: "Team A team"
+  labels: # every resource this team creates must carry exactly these labels
+    cost_centre: "10AB20"
+    owner: "team-a-ops" # FIX (suggested): a team mailbox or group is more durable than a person
+    service_id: "SVC-A" # placeholder: real value and format to be confirmed
+    application_id: "APP-A" # placeholder: real value and format to be confirmed
+notification-config:
+  email: team-a-ops@example.com
+teams:
+  team_a_ops:
+    group_id: "00000000-0000-0000-0000-00000000000a"
+    access: ops
+    resource_types: "Control Planes"
+  team_a_read:
+    group_id: "00000000-0000-0000-0000-00000000000b"
+    access: read
+    resource_types: "Control Planes"
+  team_b_ops:
+    group_id: x
+    access: ops
+    resource_types: Control Planes
+system_accounts:
+  - name: team_a_nonprod # FIX: was "- team_a_nonprod:" (a key with no value)
+    team_membership: team_a_ops
+    vault-location: "secrets/team-a/nonprod" # FIX (suggested): separate path per tier
+    environments: [dev, eng, staging] # FIX: a list, not { dev, eng, ... }
+    roles:
+      - {"entity_type": "Control Planes", "role": "Creator"}
+  - name: team_a_prod
+    team_membership: team_a_ops
+    vault-location: "secrets/team-a/prod"
+    environments: [prod]
+    roles:
+      - {"entity_type": "Control Planes", "role": "Creator"}

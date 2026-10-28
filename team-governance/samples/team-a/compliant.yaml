@@ -1,0 +1,11 @@
+_defaults:
+  kongctl:
+    namespace: team-a-dev
+control_planes:
+  - ref: team-a-dev-cp
+    name: team-a-dev
+    labels:
+      owner: team-a-ops
+      cost_centre: 10AB20
+      service_id: SVC-A
+      application_id: APP-A

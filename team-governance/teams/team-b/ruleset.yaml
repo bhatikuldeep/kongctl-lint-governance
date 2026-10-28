@@ -1,0 +1,50 @@
+# Ruleset for the team-b team. Keep this file in step with onboarding/team-b.yaml: the values below are copied from it.
+# Run from the repository root:  kongctl lint -f <team files> -R -r team-governance/teams/team-b/ruleset.yaml -F warn
+extends:
+  - ai-gateway/ruleset.yaml
+  - team-governance/rulesets/resources-baseline.yaml
+
+rules:
+  team-b-namespace:
+    description: "Files for team-b use its namespace"
+    message: "_defaults.kongctl.namespace must be team-b or start with team-b-"
+    severity: error
+    given: "$"
+    then: {field: "_defaults.kongctl.namespace", function: pattern, functionOptions: {match: "^team-b(\\-[a-z0-9\\-]+)?$"}}
+
+  team-b-resource-types:
+    description: "team-b may only define the resource types its system accounts have roles for (control_planes)"
+    message: "team-b may only define: control_planes"
+    severity: error
+    given: "$"
+    then:
+      function: schema
+      functionOptions: {schema: {propertyNames: {enum: [_defaults, control_planes]}}}
+
+  team-b-owner:
+    description: "Resources carry the owner onboarded for team-b"
+    message: "labels.owner must be team-b-ops (from onboarding/team-b.yaml)"
+    severity: error
+    given: ["$.control_planes[*]"]
+    then: {field: labels.owner, function: pattern, functionOptions: {match: "^team-b-ops$"}}
+
+  team-b-cost-centre:
+    description: "Resources carry the cost centre onboarded for team-b"
+    message: "labels.cost_centre must be 30CD40 (from onboarding/team-b.yaml)"
+    severity: error
+    given: ["$.control_planes[*]"]
+    then: {field: labels.cost_centre, function: pattern, functionOptions: {match: "^30CD40$"}}
+
+  team-b-service-id:
+    description: "Resources carry the service ID onboarded for team-b"
+    message: "labels.service_id must be SVC-B (from onboarding/team-b.yaml)"
+    severity: error
+    given: ["$.control_planes[*]"]
+    then: {field: labels.service_id, function: pattern, functionOptions: {match: "^SVC\\-B$"}}
+
+  team-b-application-id:
+    description: "Resources carry the application ID onboarded for team-b"
+    message: "labels.application_id must be APP-B (from onboarding/team-b.yaml)"
+    severity: error
+    given: ["$.control_planes[*]"]
+    then: {field: labels.application_id, function: pattern, functionOptions: {match: "^APP\\-B$"}}

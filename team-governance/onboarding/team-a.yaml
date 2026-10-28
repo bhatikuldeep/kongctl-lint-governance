@@ -1,0 +1,37 @@
+# Team A onboarding configuration (synthetic). Lines marked FIX show what a first draft would typically get wrong; service ID and application ID are placeholders.
+type: konnect.team
+team:
+  name: "team-a"
+  description: "Team A team"
+  labels:                                  # every resource this team creates must carry exactly these labels
+    cost_centre: "10AB20"
+    owner: "team-a-ops"                     # FIX: label values cannot contain spaces or @ (a value such as "Team A Ops" would be rejected); use an id, ideally a team or group rather than a person
+    service_id: "SVC-A"                         # placeholder: real value and format to be confirmed
+    application_id: "APP-A"              # placeholder: real value and format to be confirmed
+
+notification-config:
+  email: team-a-ops@example.com
+
+teams:
+  team_a_ops:
+    group_id: "00000000-0000-0000-0000-00000000000a"
+    access: ops
+    resource_types: "Control Planes"
+  team_a_read:
+    group_id: "00000000-0000-0000-0000-00000000000b"
+    access: read
+    resource_types: "Control Planes"
+
+system_accounts:
+  - name: team_a_nonprod           # FIX: was "- team_a_nonprod:" (a key with no value)
+    team_membership: team_a_ops
+    vault-location: "secrets/team-a/nonprod"   # FIX (suggested): separate path per tier
+    environments: [dev, eng, staging]          # FIX: a list, not { dev, eng, ... }
+    roles:
+      - { "entity_type": "Control Planes", "role": "Creator" }
+  - name: team_a_prod
+    team_membership: team_a_ops
+    vault-location: "secrets/team-a/prod"
+    environments: [prod]
+    roles:
+      - { "entity_type": "Control Planes", "role": "Creator" }
