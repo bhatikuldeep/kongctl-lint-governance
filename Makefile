@@ -21,3 +21,4 @@ check:
 	$(call fail,$(G)/samples/team-a/impersonates-team-b.yaml,$(G)/teams/team-a/ruleset.yaml)
 	$(call pass,$(G)/samples/team-a/ai-gateway-compliant.yaml,$(G)/teams/team-a/ruleset.yaml)
 	$(call fail,$(G)/samples/team-a/ai-gateway-other-team.yaml,$(G)/teams/team-a/ruleset.yaml)
+	@kongctl lint -f ai-gateway/examples/wrong.yaml -r $(G)/teams/team-a/ruleset.yaml -o json 2>/dev/null | grep -q '"rule_id": "aigw-' && echo "ok   team ruleset loads the AI Gateway rules (extends resolved)" || { echo "FAIL extends did not load"; exit 1; }

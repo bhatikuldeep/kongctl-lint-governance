@@ -40,6 +40,7 @@ kongctl plan --require-namespace=<team> -f . --mode apply --output-file plan.jso
 ## Things to know
 
 - **Choose the ruleset from the pipeline, never from the namespace inside the file.** `samples/team-a/impersonates-team-b.yaml` copies team-b's namespace and labels and passes team-b's rules. The platform team fixes each pipeline to its team's ruleset.
+- **A wrong `extends` path does not fail the run.** kongctl logs `cannot open external ruleset` and lints with no rules, exit code 0. Run from the repository root; `make check` has a test that the team rulesets really load the AI Gateway rules.
 - **Label values must be identifiers**: letters, digits, `-`, `_`, `.`, at most 63 characters (`team-a-ops`, not "Team A Ops" or an email address). The baselines check this.
 - **The team ruleset repeats values from the onboarding file.** Nothing links them, so review both together.
 - Label rules cover `control_planes`. Add other resource types to the `given` lists in `rulesets/resources-baseline.yaml`.

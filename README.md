@@ -96,6 +96,8 @@ rules:
   aigw-model-owner-label: off      # or: warn / error
 ```
 
+`extends` paths resolve from the directory you run `kongctl` in, so run from the repository root. A wrong path only logs `cannot open external ruleset` and the run continues **without those rules, with exit code 0**. Keep a known-bad file in CI and assert that lint fails on it (see `make check`).
+
 **Recommended rollout:** enforce errors first and remediate the findings, review warnings with their owners, then introduce `-F warn` when the team is ready for the stricter policy.
 
 ## What the AI Gateway ruleset covers
@@ -114,6 +116,7 @@ rules:
 ## Limits
 
 - `kongctl lint` reads each file as written. It does not expand `!file`, `!ref` or `_templates`, and cannot run custom JavaScript functions. Built-in functions cover the rules here.
+- A missing ruleset in `extends` does not fail the run (see above), so test that your rules load.
 - Rules see one file at a time, so cross-file checks (such as "this policy is attached to a model") need a different tool.
 - Lint is feedback, not a gate: anyone who can call kongctl directly can skip it. Namespace flags and Konnect roles on the system account do the enforcing.
 
